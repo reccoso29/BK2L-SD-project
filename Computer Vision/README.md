@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ Knightro Face Recognition
+#  Knightro Face Recognition
 
 ### Software subsystem for the Knightro interactive animatronic mascot
 
@@ -233,7 +233,5 @@ WARN: Failed to read frame from webcam, stopping.
 <div align="center">
 
 **🛡️ Charge On!** ⚔️
-
-*Built for the BK2L Senior Design Project at the University of Central Florida*
 
 </div>
