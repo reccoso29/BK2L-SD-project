@@ -1,0 +1,20 @@
+# Knightro Face Recognition — Python dependencies
+#
+# Install with: pip install -r requirements.txt
+#
+# NOTE FOR PI DEPLOYMENT (Phase 2):
+# - dlib (a dependency of face_recognition) can take 30-60 minutes to compile
+#   on a Raspberry Pi. Plan for this. On your laptop it's near-instant.
+# - mediapipe has official ARM64 wheels for Pi 4 / Pi 5, so that part is painless.
+
+# Computer vision basics
+opencv-python>=4.8.0         # Webcam access, drawing, image manipulation
+mediapipe>=0.10.0            # Face detection (SD-7) and later pose/hand tracking
+numpy>=1.24.0                # Array math — OpenCV images are numpy arrays
+
+# Face recognition pipeline (used in SD-9, SD-10, SD-11)
+face_recognition>=1.3.0      # Wrapper around dlib's FaceNet-based recognizer
+# dlib is pulled in automatically by face_recognition
+
+# Encryption for embeddings at rest (SD-10)
+cryptography>=41.0.0         # Provides Fernet symmetric encryption

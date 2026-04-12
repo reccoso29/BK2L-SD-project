@@ -1,0 +1,147 @@
+# =============================================================================
+# Knightro Face Recognition — .gitignore
+# =============================================================================
+# Anything that can be regenerated, downloaded, or contains sensitive data
+# should NOT be committed to git. This file tells git which paths to ignore.
+#
+# To check what git is currently tracking:    git ls-files
+# To check what would be committed next:      git status
+# To force-add a file that matches a rule:    git add -f path/to/file
+
+
+# -----------------------------------------------------------------------------
+# Python virtual environments
+# -----------------------------------------------------------------------------
+# A venv is hundreds of MB of installed packages — it should NEVER be in git.
+# Anyone cloning the repo can recreate it from requirements.txt.
+.venv/
+venv/
+env/
+ENV/
+
+
+# -----------------------------------------------------------------------------
+# Python bytecode and caches
+# -----------------------------------------------------------------------------
+# Python compiles .py files into .pyc files in __pycache__/ folders for speed.
+# These are auto-generated and platform-specific — never commit them.
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+
+# -----------------------------------------------------------------------------
+# Downloaded ML models
+# -----------------------------------------------------------------------------
+# The MediaPipe face detector model auto-downloads on first run. It's also
+# fairly large and can be re-fetched anytime, so no reason to commit it.
+# If you ever want to commit a specific model file, use `git add -f`.
+models/
+*.tflite
+*.onnx
+*.pt
+*.pth
+*.h5
+
+
+# -----------------------------------------------------------------------------
+# Project data — runtime artifacts and SENSITIVE biometric data
+# -----------------------------------------------------------------------------
+# This folder contains:
+#   - Webcam snapshots from the test script (data/snapshot_*.jpg)
+#   - The encrypted faculty embeddings database (SD-10, when built)
+#   - Any other runtime-generated data
+#
+# The encrypted embeddings file MUST NOT be committed even though it's
+# encrypted — committing it would violate the privacy policy in
+# docs/PRIVACY_POLICY.md. The whole data/ folder is ignored as a safety net.
+data/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+
+
+# -----------------------------------------------------------------------------
+# Encryption keys and secrets — NEVER COMMIT THESE
+# -----------------------------------------------------------------------------
+# When SD-10 is built, the Fernet encryption key will live in one of these
+# files. Committing a key would defeat the entire encryption strategy.
+# If you ever accidentally commit a key, you must rotate it immediately.
+*.key
+*.pem
+.env
+.env.*
+secrets/
+credentials/
+
+
+# -----------------------------------------------------------------------------
+# IDE and editor files
+# -----------------------------------------------------------------------------
+# These are personal to whoever is editing the code and shouldn't be shared.
+# Different team members will have different editors, so committing one
+# person's settings just creates noise.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.spyderproject
+.spyproject
+
+
+# -----------------------------------------------------------------------------
+# Operating system junk
+# -----------------------------------------------------------------------------
+# macOS sprinkles .DS_Store files into every folder you ever open in Finder.
+# Windows does the same with Thumbs.db. These are useless to anyone else.
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+
+# -----------------------------------------------------------------------------
+# Python packaging artifacts
+# -----------------------------------------------------------------------------
+# Created if you ever run `python setup.py build` or `pip install -e .`
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+
+# -----------------------------------------------------------------------------
+# Test and coverage artifacts
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+
+# -----------------------------------------------------------------------------
+# Jupyter notebook checkpoints (in case anyone uses notebooks for prototyping)
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+logs/
