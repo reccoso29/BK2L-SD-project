@@ -1,0 +1,2 @@
+# Baseline currently uses only Python standard library.
+# Keep this file for future dependencies as features are implemented.
