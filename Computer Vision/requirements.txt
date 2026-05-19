@@ -2,19 +2,33 @@
 #
 # Install with: pip install -r requirements.txt
 #
-# NOTE FOR PI DEPLOYMENT (Phase 2):
-# - dlib (a dependency of face_recognition) can take 30-60 minutes to compile
-#   on a Raspberry Pi. Plan for this. On your laptop it's near-instant.
-# - mediapipe has official ARM64 wheels for Pi 4 / Pi 5, so that part is painless.
+# All packages have pre-built wheels for macOS ARM (Apple Silicon),
+# Linux x86/ARM (Raspberry Pi), and Windows. No C++ compilation required.
 
-# Computer vision basics
+# ---------------------------------------------------------------------------
+# Computer vision — detection and tracking (SD-7, SD-8)
+# ---------------------------------------------------------------------------
 opencv-python>=4.8.0         # Webcam access, drawing, image manipulation
-mediapipe>=0.10.0            # Face detection (SD-7) and later pose/hand tracking
+mediapipe>=0.10.0            # Face detection via BlazeFace model
 numpy>=1.24.0                # Array math — OpenCV images are numpy arrays
 
-# Face recognition pipeline (used in SD-9, SD-10, SD-11)
-face_recognition>=1.3.0      # Wrapper around dlib's FaceNet-based recognizer
-# dlib is pulled in automatically by face_recognition
+# ---------------------------------------------------------------------------
+# Face recognition — embeddings and comparison (SD-9, SD-10, SD-11)
+# ---------------------------------------------------------------------------
+# We use a FaceNet/MobileFaceNet ONNX model for face embeddings instead of
+# the dlib-based `face_recognition` library. dlib requires compiling C++
+# from source and is broken on macOS 15 + Apple Silicon due to missing
+# headers (fp.h, iosfwd). ONNX Runtime has pre-built wheels for all
+# platforms — zero compilation, same embedding quality.
+onnxruntime>=1.17.0          # Runs the FaceNet ONNX model for embeddings
+scikit-learn>=1.3.0          # Distance metrics, optional preprocessing
 
-# Encryption for embeddings at rest (SD-10)
-cryptography>=41.0.0         # Provides Fernet symmetric encryption
+# ---------------------------------------------------------------------------
+# Encryption — biometric data at rest (SD-10)
+# ---------------------------------------------------------------------------
+cryptography>=41.0.0         # Fernet symmetric encryption for embeddings
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+Pillow>=10.0.0               # Image loading/resizing for enrollment photos

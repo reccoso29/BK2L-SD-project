@@ -1,17 +1,11 @@
 """
-test_face_detection.py — Manual test/demo for the face detector.
-
-Run this from the project root with:
-    python tests/test_face_detection.py
-
-It opens your webcam, runs face detection on every frame, draws bounding
+This is a test program will open your webcam, runs face detection on every frame, draws bounding
 boxes, and shows the FPS in the corner. Press 'q' to quit.
 
 This is a MANUAL test, not an automated unit test. 
 The goal here is to:
   1. Confirm the detector actually works on real webcam input
-  2. Get a baseline FPS number on your laptop, which you'll compare against
-     the Pi's FPS in Phase 2 (SD-7 Pi deployment step)
+  2. Get a baseline FPS number on your laptop, which we'll compare agains the Pi's FPS in Phase 2 (SD-7 Pi deployment step)
   3. Eyeball-verify the bounding boxes look right when you move around
 """
 
@@ -19,9 +13,9 @@ import sys
 import time
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
 # Import path setup
-# ---------------------------------------------------------------------------
+# #####################
+
 # This test script lives in tests/ but wants to import from src/.
 # Rather than making the project a proper installable package (overkill for
 # now), we just add src/ to Python's import path. __file__ is the path to
