@@ -1,7 +1,7 @@
 """Main interaction loop for Knightro baseline interaction logic.
 
 Flow:
-User input -> speech-to-text placeholder -> safety pre-check -> intent detection
+User speech -> offline Whisper speech-to-text -> safety pre-check -> intent detection
 -> interaction router -> offline/online handler -> output safety -> print summary
 """
 
@@ -18,16 +18,17 @@ EXIT_TERMS = {"exit", "quit", "q"}
 def run() -> None:
     """Run the baseline command-line interaction loop."""
     print("Knightro Baseline Interaction Loop")
-    print("Type a message. Type 'exit' to stop.")
+    print("Speak into the microphone. Say 'exit' to stop.")
+    print("Tip: set KNIGHTRO_STT_MODE=typed for keyboard fallback during setup.")
     print(f"System state: {'ONLINE' if system_state.is_online() else 'OFFLINE'}")
 
     while True:
-        stt_result = speech_to_text.get_user_utterance()
+        stt_result = speech_to_text.speech_to_text()
         if stt_result["error"]:
             if stt_result["reason"] in {"interrupt", "eof"}:
                 print("Exiting Knightro interaction loop.")
                 break
-            print("Input was empty. Please try again.")
+            print(f"Speech input failed ({stt_result['reason']}). Please try again.")
             continue
 
         user_text = stt_result["text"]

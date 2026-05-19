@@ -1,2 +1,7 @@
-# Baseline currently uses only Python standard library.
-# Keep this file for future dependencies as features are implemented.
+# Offline speech-to-text dependencies
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.14
+openai-whisper>=20240930
+
+# Optional: improve performance on Apple Silicon (installs automatically with whisper in many setups)
+# torch
