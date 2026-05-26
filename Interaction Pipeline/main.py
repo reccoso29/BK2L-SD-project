@@ -5,6 +5,7 @@ User speech -> offline Whisper speech-to-text -> safety pre-check -> intent dete
 -> interaction router -> offline/online handler -> output safety -> print summary
 """
 
+import tts
 import intent_detection
 import interaction_router
 import speech_to_text
@@ -51,7 +52,7 @@ def run() -> None:
             print(f"Knightro: {SAFE_OUTPUT_FALLBACK}")
             continue
 
-        print(f"Knightro: {response_summary}")
+        tts.speak(response_summary)
 
 
 if __name__ == "__main__":

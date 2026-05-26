@@ -1,5 +1,5 @@
 """
-test_face_recognition.py — Full real-time face recognition demo.
+Full real-time face recognition check after enrolling someone.
 
 This is the culmination of SD-7 through SD-11. It opens the webcam,
 detects faces, tracks them, recognizes enrolled faculty, and displays
@@ -239,7 +239,7 @@ def main() -> int:
                       f"Enrolled: {recognizer.enrolled_count}  |  "
                       f"Threshold: {recognizer.threshold:.2f}")
 
-            for color, thickness in [(UCF_BLACK, 4), (UCF_GOLD, 2)]:
+            for color, thickness in [(UCF_BLACK, 4), (UCF_BLACK, 2)]:
                 cv2.putText(display, status, (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, thickness)
 

@@ -45,6 +45,7 @@ from face_embedder import FaceEmbedder
 # ---------------------------------------------------------------------------
  
 def capture_faces_from_webcam(
+        
     detector: FaceDetector,
     num_captures: int = 5,
     delay_between: float = 0.5,
@@ -162,6 +163,7 @@ def capture_faces_from_webcam(
  
  
 def capture_face_from_photo(
+        
     detector: FaceDetector,
     photo_path: str,
 ) -> list[np.ndarray]:
