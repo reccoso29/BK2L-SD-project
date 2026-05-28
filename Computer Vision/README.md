@@ -100,21 +100,91 @@ Computer Vision/
 
 ### Option A: conda (recommended — required for dlib)
 
-```bash
-# Install Miniforge if you don't have conda
-# macOS: brew install --cask miniforge
-# Windows: download from https://conda-forge.org/download/
+#### macOS
 
-# Create environment
+```bash
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# Follow the instructions, it would require your computer password and then click enter, it prints to add brew to your PATH.
+
+# Install Miniforge (conda package manager)
+brew install --cask miniforge
+conda init "$(basename "${SHELL}")"
+
+# Important! Close and reopen your terminal after this, you should see (base) next to your path.
+
+# Install Python 3.12 (dlib doesn't work on 3.14)
+brew install python@3.12
+
+# Install portaudio (needed for microphone/PyAudio)
+brew install portaudio
+
+# Create conda environment with Python 3.12
 conda create -n cv_env python=3.12 -y
 conda activate cv_env
 
+# At this point, you should see a (cv_env) instead of (base) next to your path.
+
 # Install dlib and OpenCV via conda (pre-built, no compilation)
+conda install -c conda-forge dlib=19.24.6 face_recognition opencv -y
+
+# (Optional) If you have any issues use this:
+pip install --force-reinstall git+https://github.com/ageitgey/face_recognition_models
+
+# Fix pkg_resources for face_recognition_models (needed on setuptools 81+)
+pip install "setuptools<81"
+
+# Install remaining dependencies
+pip install mediapipe onnxruntime cryptography
+
+# You should be ready!
+
+```
+
+#### Windows
+
+```bash
+# Download and install Miniforge from:
+#   https://conda-forge.org/download/
+# Pick: Miniforge3-Windows-x86_64.exe
+# Check "Add to PATH" during installation
+# Close and reopen your terminal after install
+
+# Create conda environment with Python 3.12
+conda create -n cv_env python=3.12 -y
+conda activate cv_env
+
+# Install dlib and OpenCV via conda
 conda install -c conda-forge dlib=19.24.6 face_recognition opencv -y
 
 # Install remaining dependencies
 pip install mediapipe onnxruntime cryptography
 ```
+
+#### Linux / Raspberry Pi
+
+```bash
+# Install Miniforge
+curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+bash Miniforge3-$(uname)-$(uname -m).sh
+# Follow the prompts, then close and reopen your terminal
+
+# Create conda environment with Python 3.12
+conda create -n cv_env python=3.12 -y
+conda activate cv_env
+
+# Install dlib and OpenCV via conda
+conda install -c conda-forge dlib=19.24.6 face_recognition opencv -y
+
+# Install remaining dependencies
+pip install mediapipe onnxruntime cryptography
+```
+
+> [!IMPORTANT]
+> Always activate the conda environment before running any scripts:
+> ```bash
+> conda activate cv_env
+> ```
 
 ### Option B: pip only (no dlib — uses legacy ONNX model)
 
@@ -135,11 +205,39 @@ pip install -r requirements.txt
 
 ### Enroll a faculty member (webcam)
 
-```bash
-python src/enroll.py --enroll --name "Dr. Smith"
-```
+> Important!
+>> Make sure you have right encryption key for the database before enrolling anyone. The program will tell you if you dont have the right key so please contact Angel Hernandez to get the right key. 
 
-The webcam opens with on-screen guidance for capturing 10 images from different angles (straight, left, right, up, down, 45°). Press SPACE to capture each frame or 'a' for auto-capture mode.
+- ### Steps you must follow to enroll someone:
+1. #### Activate Conda:
+
+conda activate cv_env
+
+2. #### Enter the CV folder:
+
+cd Computer\ Vision/
+
+3. #### Enroll someone, the webcam opens with on-screen guidance for capturing 10 images from different angles (straight, left, right, up, down, 45°). Press SPACE to capture each frame or 'a' for auto-capture mode.:
+
+python src/enroll.py --enroll --name "Dr. Smith"
+
+4. #### Check that the enrolled person was successfully saved in the database.
+python src/enroll.py --list
+
+5. #### Test if the data is good. You should see [GOOD] for all tests after running this line, if not,  then you must re-enroll the person:
+
+python src/enroll.py --test
+
+6. #### Do a quick test in real time to make sure it recognizes the person enrolled:
+
+python tests/test_face_recognition.py
+
+7. #### Save everything and commit ONLY dlib_face_embeddings.enc to GitHub and push it!
+
+8. #### You are done. Thank you!
+
+<br>
+
 
 ### Enroll from a photo
 
