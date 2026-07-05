@@ -48,8 +48,8 @@ _sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # conflicting commands to the motors (e.g. if called from different threads)
 _lock = threading.Lock()
 
-
 def _send_frame(row):
+
     """
     Takes one row from the CSV (one frame) and sends each servo value
     as a UDP command to the correct Weigl controller.
@@ -63,18 +63,21 @@ def _send_frame(row):
     Columns 17+   → Weigl 2 (channel resets back to 1 on the second Weigl)
     """
     for col_index, value in enumerate(row):
-        # Skip the frame number column and any empty cells
         if col_index == 0 or value.strip() == "":
             continue
+        try:
+            if col_index <= 16:
+                command = f'!esl{col_index}%{value}#'
+                _sock1.sendto(command.encode(), (WEIGL1_IP, WEIGL_PORT))
+            else:
+                channel = col_index - 16
+                command = f'!esl{channel}%{value}#'
+                _sock2.sendto(command.encode(), (WEIGL2_IP, WEIGL_PORT))
+        except OSError:
+            # Motors not reachable (normal when testing without the robot!)
+            # Just skip silently and keep going
+            pass
 
-        if col_index <= 16:
-            command = f'!esl{col_index}%{value}#'
-            _sock1.sendto(command.encode(), (WEIGL1_IP, WEIGL_PORT))
-        else:
-            # Weigl 2 channels restart at 1
-            channel = col_index - 16
-            command = f'!esl{channel}%{value}#'
-            _sock2.sendto(command.encode(), (WEIGL2_IP, WEIGL_PORT))
 
 
 def play(action, stop_event=None):

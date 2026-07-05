@@ -1,26 +1,18 @@
-"""Knightro Integrated Demo — Face Recognition + Voice + TTS + Animations + LED Eyes
+"""Knightro Integrated Demo
+Face Recognition + Voice + TTS + Animations + GIF Eyes + Audio Clips
 
-This script ties together ALL subsystems:
-  1. Camera opens and runs face detection/tracking/recognition
-  2. Wake word ("Hey Knightro") activates the system
-  3. Motors home to neutral position on startup
-  4. LED matrix shows matching GIF eye animations throughout
-  5. When a known person is detected, Knightro asks for confirmation
-  6. Commands are routed through the interaction pipeline
-  7. Knightro speaks (Piper TTS) AND moves AND shows eye GIF simultaneously
+Think of this file like a stage director's script!
+For every moment in the show, it tells:
+  - The BODY what to do    (animate.py → servo motors move)
+  - The EYES what to show  (gif_player.py → LED matrix shows a GIF)
+  - The VOICE what to say  (tts.py → robot voice OR audio_clips.py → real recording)
 
-Usage:
+How to run:
     cd into repo root (BK2L-SD-project/)
     python3 "Interaction Pipeline/integrated_demo.py"
 
-    Press 'q' in the camera window to quit.
-    Press 'w' to simulate wake word.
-
-Requirements (run in conda cv_env on Pi):
-    pip install piper-tts sounddevice soundfile opencv-python mediapipe pillow
-    dlib installed via conda
-    rgi-rgb-led-matrix installed (see gif_player.py header)
-    animate.py and gif_player.py must be in the repo root
+    Press 'q' to quit
+    Press 'w' to simulate the wake word
 """
 
 import os
@@ -29,7 +21,7 @@ import time
 import threading
 import queue
 
-# ── Path setup ────────────────────────────────────────────────────────────────
+# ── Tell Python where our other files are ────────────────────────────────────
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 _CV_SRC       = os.path.join(_PROJECT_ROOT, "Computer Vision", "src")
@@ -41,24 +33,25 @@ sys.path.insert(0, _PROJECT_ROOT)
 
 import cv2
 
-from face_detection  import FaceDetector
+from face_detection  import FaceDetector, draw_boxes
 from face_tracker    import FaceTracker
-from face_recognizer import FaceRecognizer
+from face_recognizer import FaceRecognizer, RecognitionResult
 
 import intent_detection
 import interaction_router
 import safety_filters
 import system_state
 import tts
+import audio_clips
 
-# ── Animate (servo motors) ────────────────────────────────────────────────────
+# ── Load animate.py (servo motors) ───────────────────────────────────────────
 try:
     import animate
     _ANIMATE_AVAILABLE = True
     print("[demo] animate.py loaded — motors ACTIVE")
 except ImportError:
     _ANIMATE_AVAILABLE = False
-    print("[demo] WARNING: animate.py not found — motors DISABLED")
+    print("[demo] WARNING: animate.py not found — motors DISABLED (using stub)")
     class _AnimateStub:
         def home(self): print("[animate-stub] home()")
         def play(self, action, stop_event=None): print(f"[animate-stub] play('{action}')")
@@ -67,17 +60,16 @@ except ImportError:
             stop_event.wait()
     animate = _AnimateStub()
 
-# ── GIF player (LED matrix eyes) ─────────────────────────────────────────────
+# ── Load gif_player.py (LED eye display) ─────────────────────────────────────
 try:
     import gif_player
     _GIF_AVAILABLE = True
     print("[demo] gif_player.py loaded — LED eyes ACTIVE")
 except ImportError:
     _GIF_AVAILABLE = False
-    print("[demo] WARNING: gif_player.py not found — LED eyes DISABLED")
+    print("[demo] WARNING: gif_player.py not found — LED eyes DISABLED (using stub)")
     class _GifStub:
         def show(self, name): print(f"[gif-stub] show('{name}')")
-        def show_for_intent(self, intent): print(f"[gif-stub] show_for_intent('{intent}')")
         def stop(self): print("[gif-stub] stop()")
     gif_player = _GifStub()
 
@@ -85,73 +77,92 @@ except ImportError:
 CAMERA_INDEX          = 0
 RECOGNITION_COOLDOWN  = 10.0
 GREETING_DELAY_FRAMES = 3
-STT_MODE              = "whisper"   # "typed" or "whisper"
+STT_MODE              = "whisper"
 WAKE_WORD_MODE        = True
 
-# ── Intent → animation mapping ────────────────────────────────────────────────
-INTENT_ANIMATION_MAP = {
-    "greeting":      "hello",
-    "farewell":      "goodbye",
-    "chant":         "chant",
-    "dance":         "dance",
-    "goknights":     "goknights",
-    "known_person":  "hello",
-    "identity":      "hello",
-    "directions":    "wave",
-    "ucf_trivia":    "wave",
-    "knightro_info": "wave",
-    "unknown":       "thinking",
+# ── The Master Coordination Table ────────────────────────────────────────────
+# For each moment, what animation + GIF should play?
+# Format: "moment_name": ("animation_name", "gif_name")
+COORDINATION_MAP = {
+    "wake_word":      ("hello",     "hello"),
+    "scanning":       ("thinking",  "thinking"),
+    "known_person":   ("hello",     "Heart_Eyes"),
+    "unknown_person": ("hello",     "hello"),
+    "chant":          ("chant",     "chant"),
+    "goknights":      ("goknights", "goknights"),
+    "dance":          ("dance",     "dance"),
+    "directions":     ("wave",      "wave"),
+    "farewell":       ("goodbye",   "goodbye"),
+    "thinking":       ("thinking",  "thinking"),
+    "error":          ("error",     "Swirly_Eyes"),
+    "football":       ("ucf",       "Fire_Eyes"),
+    "weather":        ("wave",      "weather"),
+    "next_game":      ("wave",      "next game"),
+    "idle":           (None,        "default"),
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _play_animation_with_speech(intent: str, speech_text: str):
+def _do_moment(moment_name, speech_text=None, audio_clip=None, loop_anim=False):
     """
-    Runs TTS + servo animation + GIF eye simultaneously.
-    - GIF switches immediately to match the intent
-    - Servo animation runs in background thread
-    - TTS blocks until speech finishes, then stops servo animation
-    - After speech, GIF returns to default (idle eyes)
+    The main coordination function!
+    Triggers the right animation + GIF eyes + speech all at the same time.
+
+    Args:
+        moment_name:  Key from COORDINATION_MAP (e.g. "chant", "farewell")
+        speech_text:  Text for robot voice to say (None = silent)
+        audio_clip:   Name of audio clip to play AFTER speech (None = none)
+        loop_anim:    True = loop animation until speech done, False = play once
     """
-    # Switch eyes to match what Knightro is doing
-    gif_player.show_for_intent(intent)
+    anim_name, gif_name = COORDINATION_MAP.get(moment_name, (None, "default"))
 
-    animation_name = INTENT_ANIMATION_MAP.get(intent)
+    # Switch eyes immediately
+    gif_player.show(gif_name)
 
-    if not animation_name:
-        tts.speak(speech_text)
+    # No animation for this moment? Just speak and return
+    if anim_name is None:
+        if speech_text:
+            tts.speak(speech_text)
+        if audio_clip:
+            audio_clips.play(audio_clip)
         gif_player.show("default")
         return
 
-    if intent == "dance":
-        # Dance: let full animation finish, speech runs alongside
+    # Start body animation in background thread
+    stop_event = threading.Event()
+    if loop_anim:
         anim_thread = threading.Thread(
-            target=animate.play, args=(animation_name,), daemon=True
+            target=animate.play_loop,
+            args=(anim_name, stop_event),
+            daemon=True
         )
-        anim_thread.start()
-        tts.speak(speech_text)
-        anim_thread.join()
-        gif_player.show("default")
-        return
-
-    # All other intents: stop animation when speech ends
-    stop_event  = threading.Event()
-    anim_thread = threading.Thread(
-        target=animate.play, args=(animation_name, stop_event), daemon=True
-    )
+    else:
+        anim_thread = threading.Thread(
+            target=animate.play,
+            args=(anim_name, stop_event),
+            daemon=True
+        )
     anim_thread.start()
-    tts.speak(speech_text)
-    stop_event.set()
-    anim_thread.join(timeout=1.0)
 
-    # Return eyes to default after speaking
+    # Speak (blocks until done)
+    if speech_text:
+        tts.speak(speech_text)
+
+    # Play audio clip after speech
+    if audio_clip:
+        audio_clips.play(audio_clip)
+
+    # Stop animation
+    stop_event.set()
+    anim_thread.join(timeout=2.0)
+
+    # Return to idle eyes
     gif_player.show("default")
 
 
-def _play_thinking_loop_while(fn, *args, **kwargs):
+def _do_thinking_while(fn, *args, **kwargs):
     """
-    Loops the thinking animation AND thinking GIF while fn() runs.
+    Shows thinking animation + eyes while waiting for a slow function.
+    Like Knightro scratching his head while thinking of an answer!
     Returns whatever fn() returned.
     """
     result_box = [None]
@@ -163,19 +174,21 @@ def _play_thinking_loop_while(fn, *args, **kwargs):
         except Exception as e:
             error_box[0] = e
 
+    gif_player.show("thinking")
     stop_event  = threading.Event()
     work_thread = threading.Thread(target=worker, daemon=True)
     anim_thread = threading.Thread(
-        target=animate.play_loop, args=("thinking", stop_event), daemon=True
+        target=animate.play_loop,
+        args=("thinking", stop_event),
+        daemon=True
     )
 
-    gif_player.show("thinking")   # eyes show thinking GIF
     anim_thread.start()
     work_thread.start()
     work_thread.join()
     stop_event.set()
-    anim_thread.join(timeout=1.0)
-    gif_player.show("default")    # back to idle eyes
+    anim_thread.join(timeout=2.0)
+    gif_player.show("default")
 
     if error_box[0]:
         raise error_box[0]
@@ -189,21 +202,21 @@ class KnightroDemo:
     def __init__(self):
         print("=" * 55)
         print("  Knightro Integrated Demo")
-        print("  Face + Voice + TTS + Motors + LED Eyes")
+        print("  Face + Voice + Motors + Eyes + Audio")
         print("=" * 55)
         print()
 
-        # Show default eyes immediately on startup
         gif_player.show("default")
+        print("[demo] Playing startup sound...")
+        audio_clips.play_async("startup")
 
-        # Home motors to safe neutral position
-        print("[demo] Homing motors...")
+        print("[demo] Homing motors to safe position...")
         animate.home()
 
-        print("[demo] Initializing face detection...")
+        print("[demo] Setting up face detection...")
         self.detector = FaceDetector(min_confidence=0.5)
 
-        print("[demo] Initializing face tracker...")
+        print("[demo] Setting up face tracker...")
         self.tracker = FaceTracker(iou_threshold=0.3, max_missed_frames=15)
 
         from pathlib import Path
@@ -216,22 +229,22 @@ class KnightroDemo:
         print(f"[demo] Face database: {db_path} (exists: {db_path.exists()})")
         db = FaceDatabase(db_path=db_path, key_path=key_path)
 
-        print("[demo] Initializing face recognizer...")
+        print("[demo] Setting up face recognizer...")
         self.recognizer = FaceRecognizer(similarity_threshold=0.970, db=db)
 
-        print(f"[demo] System: {'ONLINE' if system_state.is_online() else 'OFFLINE'}")
-        print(f"[demo] Enrolled: {self.recognizer.enrolled_count} people")
+        print(f"[demo] Internet: {'ONLINE' if system_state.is_online() else 'OFFLINE'}")
+        print(f"[demo] Enrolled people: {self.recognizer.enrolled_count}")
         print()
 
-        self._greeted: dict           = {}
-        self._recognized_tracks: set  = set()
-        self._activated               = not WAKE_WORD_MODE
-        self._busy                    = False
+        self._greeted: dict            = {}
+        self._recognized_tracks: set   = set()
+        self._activated                = not WAKE_WORD_MODE
+        self._busy                     = False
         self._input_queue: queue.Queue = queue.Queue()
         self._status_msg = 'IDLE — Say "Hey Knightro!" or press W' if WAKE_WORD_MODE else "ACTIVE"
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Main loop
+    # Main camera loop
     # ──────────────────────────────────────────────────────────────────────────
 
     def run(self):
@@ -240,7 +253,10 @@ class KnightroDemo:
             print("[demo] ERROR: Could not open camera!")
             return
 
-        print("[demo] Running. Controls:  q=quit  w=wake word")
+        print("[demo] Camera is running!")
+        print("  q = quit  |  w = simulate wake word")
+        print()
+
         self._cap = cap
 
         if STT_MODE == "typed":
@@ -284,13 +300,12 @@ class KnightroDemo:
             cap.release()
             cv2.destroyAllWindows()
             self.detector.close()
-            print("[demo] Shutting down...")
             animate.home()
             gif_player.stop()
             print("[demo] Done. Go Knights!")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Input
+    # Input handling
     # ──────────────────────────────────────────────────────────────────────────
 
     def _input_reader(self):
@@ -319,7 +334,9 @@ class KnightroDemo:
             import speech_to_text
             result = speech_to_text.speech_to_text()
             if result["error"]:
-                print(f"[demo] STT error: {result['reason']}")
+                print(f"[demo] Microphone error: {result['reason']}")
+                time.sleep(1.0)   # ← wait for any previous audio to finish
+                _do_moment("error", audio_clip="cant_hear")
                 return None
             return result["text"]
 
@@ -329,14 +346,24 @@ class KnightroDemo:
 
     def _activate(self):
         self._status_msg = "ACTIVE — Scanning..."
-        print("[demo] ACTIVATED!")
-        _play_animation_with_speech(
-            "greeting", "Hey! I'm here! Let me see who I'm talking to!"
-        )
+        print("[demo] Wake word detected — ACTIVATING!")
+
+        self._busy = True
+
+        # Small pause to let the camera settle before speaking
+        # (only matters on laptop — Pi won't have this issue!)
         time.sleep(0.5)
+
+        # Speak and animate BEFORE turning on face recognition
+        # so the Pi is not doing both at the same time (prevents audio glitch)
+        _do_moment("wake_word",
+                   speech_text="Hello, let me see who I'm talking to!")
+        time.sleep(1.0)
         self._activated = True
         self._recognized_tracks.clear()
         self._greeted.clear()
+        # Now let face recognition take over
+        self._busy = False
 
     def _deactivate(self):
         self._activated  = False
@@ -344,7 +371,7 @@ class KnightroDemo:
         self._recognized_tracks.clear()
         self._greeted.clear()
         self._status_msg = 'IDLE — Say "Hey Knightro!" or press W'
-        gif_player.show("default")   # back to idle eyes
+        gif_player.show("default")
         print("[demo] Back to idle.")
         if WAKE_WORD_MODE:
             threading.Thread(target=self._wait_for_wake_word, daemon=True).start()
@@ -355,29 +382,32 @@ class KnightroDemo:
             "hey knight", "hey night row"
         ]
         while not self._activated:
-            self._status_msg = 'IDLE — Say "Hey Knightro!" or press W'
-            print("[demo] Waiting for wake word...")
-            text = self._get_user_input("", timeout=8.0)
+            # If Knightro is busy, stop listening immediately!
+            if self._busy:
+                time.sleep(1.0)
+                continue
+            text = self._get_user_input("", timeout=4.0)
             if self._activated:
                 return
             if text is None:
                 continue
-            if any(p in text for p in WAKE_PHRASES):
+            if any(phrase in text for phrase in WAKE_PHRASES):
                 self._activate()
                 return
             else:
-                print(f"[demo] Heard '{text}', not wake word.")
+                print(f"[demo] Heard '{text}' — not the wake word.")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Face recognition + greeting
+    # Face recognition
     # ──────────────────────────────────────────────────────────────────────────
 
     def _recognize_and_greet(self, frame, track):
         MAX_RETRIES = 3
         best_result = None
 
-        # Show thinking eyes while recognizing
+        # Show thinking while scanning the face
         gif_player.show("thinking")
+        animate.play("thinking")
 
         for attempt in range(MAX_RETRIES):
             if attempt > 0 and hasattr(self, '_cap') and self._cap is not None:
@@ -434,7 +464,7 @@ class KnightroDemo:
             wrong_guesses = set()
         MAX_GUESSES = 2
 
-        _play_animation_with_speech("greeting", f"Hello! Are you {name}?")
+        _do_moment("wake_word", speech_text=f"Hello! Are you {name}?")
         self._status_msg = f"Asking: Are you {name}?"
         time.sleep(0.5)
 
@@ -448,16 +478,18 @@ class KnightroDemo:
         no_words  = ["no", "nah", "nope", "wrong", "not me", "negative"]
 
         if any(w in text for w in yes_words):
+            print(f"[demo] Confirmed: {name}")
             self._status_msg = f"Greeting {name}"
             greeting = self._greet_known(name)
-            _play_animation_with_speech("known_person", greeting)
+            # Known person gets HEART EYES!
+            _do_moment("known_person", speech_text=greeting)
             self._greeted[name] = time.time()
             self._listen_for_commands()
 
         elif any(w in text for w in no_words):
             wrong_guesses.add(name)
             if guess_count >= MAX_GUESSES:
-                tts.speak("Sorry about that! How can I help?")
+                tts.speak("Sorry about that! How can I help you today?")
                 self._listen_for_commands()
             else:
                 tts.speak("My apologies! Let me try again.")
@@ -468,9 +500,8 @@ class KnightroDemo:
                     tts.speak("I don't think we've met! Welcome to UCF!")
                     self._listen_for_commands()
         else:
-            _play_animation_with_speech(
-                "known_person", f"I'll take that as a yes! Welcome, {name}! Go Knights!"
-            )
+            _do_moment("known_person",
+                       speech_text=f"I'll take that as a yes! Welcome, {name}! Go Knights!")
             self._greeted[name] = time.time()
             self._listen_for_commands()
 
@@ -482,7 +513,7 @@ class KnightroDemo:
             "Hey! I don't think we've met. I'm Knightro, UCF's mascot!",
             "Welcome, fellow Knight! How can I help you today?",
         ]
-        _play_animation_with_speech("greeting", random.choice(greetings))
+        _do_moment("unknown_person", speech_text=random.choice(greetings))
         tts.speak("You can say 'try again' if you think I should know you!")
         self._listen_for_commands()
 
@@ -508,19 +539,19 @@ class KnightroDemo:
 
     def _listen_for_commands(self):
         self._status_msg = "Listening..."
-        print("\n[demo] Listening... (command, 'try again', or 'goodbye')")
+        print("\n[demo] Listening for a command...")
 
         text = self._get_user_input("You: ", timeout=20.0)
+
         if text is None:
-            _play_animation_with_speech(
-                "farewell", "Looks like you're done. See you around! Go Knights!"
-            )
+            _do_moment("farewell",
+                       speech_text="Looks like you're done. See you around! Go Knights!",
+                       audio_clip="farewell")
             self._finish_interaction()
             return
 
-        retry_phrases = ["try again", "scan again", "look again", "retry",
-                         "re-scan", "rescan", "check again"]
-        if any(p in text for p in retry_phrases):
+        retry_phrases = ["try again", "scan again", "look again", "retry", "rescan"]
+        if any(phrase in text for phrase in retry_phrases):
             tts.speak("Let me take another look!")
             self._recognized_tracks.clear()
             self._greeted.clear()
@@ -530,18 +561,16 @@ class KnightroDemo:
 
         is_safe, _ = safety_filters.check_input_safety(text)
         if not is_safe:
-            tts.speak("I can't help with that, but ask me about UCF!")
+            _do_moment("error",
+                       speech_text="I can't help with that, but ask me about UCF!")
             self._listen_for_commands()
             return
 
         intent = intent_detection.detect_intent(text)
 
-        # Unknown intent with LLM → thinking animation + eyes while waiting
         if intent == "unknown" and system_state.is_online():
             import online_llm
-            response = _play_thinking_loop_while(
-                online_llm.handle_unknown_with_cloud, text
-            )
+            response = _do_thinking_while(online_llm.handle_unknown_with_cloud, text)
             if response is None:
                 import offline_interactions
                 response = offline_interactions.handle_unknown_offline(text)
@@ -554,13 +583,68 @@ class KnightroDemo:
         if not is_safe:
             response = "Let me think of something else. Ask me about UCF!"
 
-        print(f"[demo] Knightro: {response}")
-        _play_animation_with_speech(intent, response)
+        print(f"[demo] Knightro says: {response}")
 
-        if intent == "farewell":
+        # ── Coordinate animation + eyes + voice + audio for each intent ───────
+
+        # CHANT — only audio clip, no robot voice
+        if intent == "chant":
+            gif_player.show("chant")
+            animate.play("chant")
+            audio_clips.play("chant")
+            gif_player.show("default")
+
+        # GO KNIGHTS — only audio clip, no robot voice
+        elif intent == "goknights":
+            gif_player.show("goknights")
+            animate.play("goknights")
+            audio_clips.play("goknights")
+            gif_player.show("default")
+
+        # DANCE — dance animation + dance eyes + robot voice
+        elif intent == "dance":
+            _do_moment("dance", speech_text=response)
+
+        # FAREWELL — goodbye animation + goodbye eyes + robot voice + farewell clip
+        elif intent == "farewell":
+            _do_moment("farewell", speech_text=response, audio_clip="farewell")
             self._finish_interaction()
             return
 
+        # FOOTBALL — fire eyes + ucf animation + robot voice + touchdown clip
+        elif intent == "ucf_trivia" and any(
+            word in text.lower()
+            for word in ["football", "touchdown", "score", "game", "bowl", "stadium"]
+        ):
+            _do_moment("football", speech_text=response, audio_clip="touchdown")
+
+        # WEATHER — weather eyes + wave animation + robot voice + happy_to_help
+        elif any(word in text.lower()
+                 for word in ["weather", "rain", "sunny", "temperature", "forecast"]):
+            _do_moment("weather", speech_text=response, audio_clip="happy_to_help")
+
+        # NEXT GAME — next game eyes + wave animation + robot voice + happy_to_help
+        elif any(word in text.lower()
+                 for word in ["next game", "schedule", "play next", "when do they play"]):
+            _do_moment("next_game", speech_text=response, audio_clip="happy_to_help")
+
+        # DIRECTIONS — wave animation + wave eyes + robot voice + happy_to_help
+        elif intent == "directions":
+            _do_moment("directions", speech_text=response, audio_clip="happy_to_help")
+
+        # UCF TRIVIA — wave animation + wave eyes + robot voice + happy_to_help
+        elif intent == "ucf_trivia":
+            _do_moment("directions", speech_text=response, audio_clip="happy_to_help")
+
+        # GREETING/IDENTITY — hello animation + hello eyes + robot voice
+        elif intent in ["greeting", "identity", "knightro_info"]:
+            _do_moment("wake_word", speech_text=response)
+
+        # EVERYTHING ELSE — thinking animation + eyes + robot voice + happy_to_help
+        else:
+            _do_moment("thinking", speech_text=response, audio_clip="happy_to_help")
+
+        # Keep the conversation going!
         self._listen_for_commands()
 
     def _finish_interaction(self):
@@ -583,35 +667,33 @@ class KnightroDemo:
             box = track.bbox
             if self._activated:
                 if hasattr(track, 'identity') and track.identity:
-                    color, label = (0, 199, 255), track.identity
+                    color = (0, 199, 255)
+                    label = track.identity
                 elif track.is_recognized:
-                    color, label = (255, 255, 255), "Visitor"
+                    color = (255, 255, 255)
+                    label = "Visitor"
                 else:
-                    color, label = (128, 128, 128), "Detecting..."
+                    color = (128, 128, 128)
+                    label = "Detecting..."
             else:
-                color, label = (128, 128, 128), ""
+                color = (128, 128, 128)
+                label = ""
 
             cv2.rectangle(display, (box.x, box.y), (box.x2, box.y2), color, 2)
             if label:
                 cv2.putText(display, label, (box.x, max(0, box.y - 10)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        # Status bar
         bar_color = (0, 255, 0) if self._activated else (0, 165, 255)
         cv2.putText(display, self._status_msg, (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, bar_color, 2)
 
-        # Hardware status
-        motor_color = (0, 255, 0) if _ANIMATE_AVAILABLE else (0, 0, 255)
-        gif_color   = (0, 255, 0) if _GIF_AVAILABLE   else (0, 0, 255)
-        cv2.putText(display,
-                    f"Motors: {'ON' if _ANIMATE_AVAILABLE else 'OFF'}  "
-                    f"Eyes: {'ON' if _GIF_AVAILABLE else 'OFF'}",
-                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.4, motor_color, 1)
+        hw = f"Motors: {'ON' if _ANIMATE_AVAILABLE else 'OFF'}  Eyes: {'ON' if _GIF_AVAILABLE else 'OFF'}"
+        cv2.putText(display, hw, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    (0, 255, 0) if _ANIMATE_AVAILABLE else (0, 0, 255), 1)
 
-        cv2.putText(display,
-                    f"Enrolled: {self.recognizer.enrolled_count} | q=quit  w=wake",
-                    (10, display.shape[0] - 15),
+        info = f"Enrolled: {self.recognizer.enrolled_count} | q=quit  w=wake"
+        cv2.putText(display, info, (10, display.shape[0] - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
 
         return display

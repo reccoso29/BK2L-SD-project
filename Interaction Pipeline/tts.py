@@ -1,131 +1,172 @@
-"""Offline text-to-speech module for Knightro using Piper TTS.
+"""
+Knightro Text-to-Speech (TTS) module
 
-Piper is a fast, local neural TTS engine — no internet needed.
-It runs on macOS, Linux, and Raspberry Pi.
+What this file does in simple terms:
+  1. Takes text like "Go Knights!"
+  2. Converts it to audio using the Piper voice model (millhouse.onnx)
+  3. Plays the audio through the speaker
+  4. Plays a short bell sound so the user knows Knightro is done talking
+     and they can now respond (like a walkie-talkie beep!)
 
-First-time setup:
-    pip install piper-tts sounddevice soundfile
-    python3 -m piper.download_voices en_US-lessac-medium
-
-Usage:
-    from tts import speak
-    speak("Go Knights! Charge On!")
+To test this file directly, run:
+  python tts.py
 """
 
+import math
 import os
+import struct
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import wave
 
-VOICE_MODEL = "en_US-ryan-high"
 
-# This finds the model relative to wherever tts.py is located
+# =============================================================================
+# SETTINGS — you can change these!
+# =============================================================================
+
+# Which voice file to use (must be in the same folder as this file)
+VOICE_MODEL_FILENAME = "millhouse.onnx"
+
+# Play a bell sound after Knightro finishes talking?
+# True = yes play the bell, False = no bell
+PLAY_BELL = True
+
+# Bell sound settings
+BELL_FREQUENCY_HZ = 880   # how high-pitched the bell is (880 = musical note A5)
+BELL_DURATION_SEC = 0.8   # how long the bell plays in seconds
+BELL_VOLUME = 1.0         # how loud (0.0 = silent, 1.0 = full volume)
+
+# =============================================================================
+# INTERNAL STUFF — you don't need to change anything below this line!
+# =============================================================================
+
+# Figure out the full path to the voice model file
+# This assumes the .onnx file is in the same folder as tts.py
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VOICE_MODEL_PATH = os.path.join(_SCRIPT_DIR, "en_US-ryan-high.onnx")
-LENGTH_SCALE = float(os.getenv("KNIGHTRO_TTS_SPEED", "0.9"))
+VOICE_MODEL_PATH = os.path.join(_SCRIPT_DIR, VOICE_MODEL_FILENAME)
 
+# Temporary files for audio (they get deleted after playing)
 _TEMP_DIR = tempfile.gettempdir()
 _AUDIO_PATH = os.path.join(_TEMP_DIR, "knightro_speech.wav")
+_BELL_PATH  = os.path.join(_TEMP_DIR, "knightro_bell.wav")
+
+# We store the loaded voice here so we don't have to reload it every time
+# (loading takes a couple seconds, so we only do it once)
 _voice_cache = {}
 
 
-def _get_voice():
-    """Load and cache the Piper voice model."""
-    cache_key = VOICE_MODEL_PATH or VOICE_MODEL
+def _generate_bell_wav(filepath):
+    """
+    Creates a simple 'ding' bell sound and saves it as a WAV file.
+    No extra libraries needed — we make the sound using pure math!
 
-    if cache_key not in _voice_cache:
+    How sound works in simple terms:
+    - Sound is just air vibrating really fast
+    - We create a mathematical wave (sine wave) that matches how fast we want it to vibrate
+    - The volume fades out so it sounds like a real bell, not an annoying beep
+    """
+    sample_rate = 22050  # how many audio samples per second (standard quality)
+    num_samples = int(sample_rate * BELL_DURATION_SEC)
+
+    with wave.open(filepath, "wb") as wav_file:
+        wav_file.setnchannels(1)       # mono sound (1 channel)
+        wav_file.setsampwidth(2)       # 16-bit audio quality
+        wav_file.setframerate(sample_rate)
+
+        frames = []
+        for i in range(num_samples):
+            t = i / sample_rate  # current time in seconds
+
+            # Create the actual sound wave
+            sine_value = math.sin(2 * math.pi * BELL_FREQUENCY_HZ * t)
+
+            # Make it fade out (so it sounds like a bell, not a beep)
+            fade = 1.0 - (t / BELL_DURATION_SEC)
+
+            # Combine everything
+            sample_value = sine_value * fade * BELL_VOLUME
+
+            # Convert to the format WAV files need (16-bit integer)
+            int_value = int(sample_value * 32767)
+            int_value = max(-32767, min(32767, int_value))
+            frames.append(struct.pack("<h", int_value))
+
+        wav_file.writeframes(b"".join(frames))
+
+
+def _play_bell():
+    """Generates and plays the bell sound after Knightro finishes talking."""
+    if not PLAY_BELL:
+        return
+    try:
+        _generate_bell_wav(_BELL_PATH)
+        time.sleep(0.8)
+        _play_wav(_BELL_PATH)
+        print("[tts] *ding* — your turn to talk!")
+    except Exception as e:
+        print(f"[tts] Bell sound failed (not a big deal): {e}")
+    finally:
+        try:
+            os.remove(_BELL_PATH)
+        except OSError:
+            pass
+
+
+def _get_voice():
+    """
+    Loads the Piper voice model from the .onnx file.
+    We only load it once and save it in memory for reuse.
+    """
+    if VOICE_MODEL_PATH not in _voice_cache:
+        # Check if piper is installed
         try:
             from piper.voice import PiperVoice
         except ImportError:
-            print("[tts] ERROR: piper-tts not installed!")
-            print("[tts] Run: pip install piper-tts")
+            print("[tts] ERROR: piper-tts is not installed!")
+            print("[tts] Run this to fix it: pip install piper-tts")
             return None
 
+        # Check if the voice file actually exists
+        if not os.path.exists(VOICE_MODEL_PATH):
+            print(f"[tts] ERROR: Can't find voice file at: {VOICE_MODEL_PATH}")
+            print(f"[tts] Make sure '{VOICE_MODEL_FILENAME}' is in the same folder as tts.py")
+            return None
+
+        # Load the voice model
         try:
-            if VOICE_MODEL_PATH and os.path.exists(VOICE_MODEL_PATH):
-                print(f"[tts] Loading voice from: {VOICE_MODEL_PATH}")
-                voice = PiperVoice.load(VOICE_MODEL_PATH)
-            else:
-                model_path = _find_model_path(VOICE_MODEL)
-                if model_path:
-                    print(f"[tts] Loading voice: {VOICE_MODEL}")
-                    voice = PiperVoice.load(model_path)
-                else:
-                    print(f"[tts] Voice model not found: {VOICE_MODEL}")
-                    print(f"[tts] Download it with: python3 -m piper.download_voices {VOICE_MODEL}")
-                    return None
-
-            _voice_cache[cache_key] = voice
+            print(f"[tts] Loading voice: {VOICE_MODEL_FILENAME}")
+            voice = PiperVoice.load(VOICE_MODEL_PATH)
+            _voice_cache[VOICE_MODEL_PATH] = voice
             print("[tts] Voice loaded successfully!")
-
         except Exception as e:
-            print(f"[tts] Failed to load voice model: {e}")
+            print(f"[tts] Failed to load voice: {e}")
             return None
 
-    return _voice_cache[cache_key]
+    return _voice_cache[VOICE_MODEL_PATH]
 
 
-def _find_model_path(model_name: str) -> str | None:
-    """Search common locations for the Piper voice model .onnx file."""
-    search_dirs = [
-        os.path.expanduser("~/.local/share/piper_voices"),
-        os.path.expanduser("~/piper_voices"),
-        os.path.join(os.getcwd(), "models", "tts"),
-        os.path.join(os.getcwd(), "piper_voices"),
-        os.getcwd(),
-    ]
-
-    onnx_filename = f"{model_name}.onnx"
-
-    for search_dir in search_dirs:
-        if not os.path.isdir(search_dir):
-            continue
-
-        direct = os.path.join(search_dir, onnx_filename)
-        if os.path.exists(direct):
-            return direct
-
-        sub = os.path.join(search_dir, model_name, onnx_filename)
-        if os.path.exists(sub):
-            return sub
-
-        for root, _, files in os.walk(search_dir):
-            if onnx_filename in files:
-                return os.path.join(root, onnx_filename)
-
-    return None
-
-
-def _play_wav(filepath: str) -> None:
-    """Play a WAV file. Tries sounddevice first, then falls back to other methods."""
-    # Method 1: sounddevice + soundfile (cleanest install on macOS)
+def _play_wav(filepath):
+    """
+    Plays a WAV audio file through the speakers.
+    Tries a few different methods in case one doesn't work.
+    """
+    # Try sounddevice first (works great on Mac, Linux, and Pi)
     try:
         import sounddevice as sd
         import soundfile as sf
-
         data, samplerate = sf.read(filepath)
         sd.play(data, samplerate)
         sd.wait()
         return
     except ImportError:
         pass
+    except Exception as e:
+        print(f"[tts] sounddevice failed: {e}, trying backup method...")
 
-    # Method 2: pygame (if they installed it)
-    try:
-        import pygame
-        pygame.mixer.init()
-        pygame.mixer.music.load(filepath)
-        pygame.mixer.music.play()
-        while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)
-        pygame.mixer.quit()
-        return
-    except ImportError:
-        pass
-
-    # Method 3: macOS built-in afplay command (no pip install needed)
-    import subprocess
-    import sys
+    # Try afplay (built into every Mac, no install needed)
     if sys.platform == "darwin":
         try:
             subprocess.run(["afplay", filepath], check=True)
@@ -133,7 +174,7 @@ def _play_wav(filepath: str) -> None:
         except (subprocess.SubprocessError, FileNotFoundError):
             pass
 
-    # Method 4: aplay on Linux / Raspberry Pi
+    # Try aplay (built into Linux and Raspberry Pi)
     if sys.platform == "linux":
         try:
             subprocess.run(["aplay", filepath], check=True)
@@ -141,56 +182,72 @@ def _play_wav(filepath: str) -> None:
         except (subprocess.SubprocessError, FileNotFoundError):
             pass
 
-    print("[tts] No audio player available!")
-    print("[tts] Install one: pip install sounddevice soundfile")
+    print("[tts] Could not play audio! Try installing: pip install sounddevice soundfile")
 
 
-def speak(text: str) -> None:
-    """Convert text to speech and play it. Fully offline.
+def speak(text):
+    """
+    Makes Knightro say something out loud!
 
-    Args:
-        text: What Knightro should say.
+    How it works:
+    1. Load the voice model (millhouse.onnx)
+    2. Convert the text into audio
+    3. Save the audio as a temporary file
+    4. Play the audio file through the speakers
+    5. Play the bell sound so user knows they can talk
+    6. Delete the temporary file
+
+    Example:
+        speak("Go Knights! Charge On!")
     """
     if not text or not text.strip():
         return
 
-    print(f'[tts] Speaking: "{text}"')
+    print(f'[tts] Knightro says: "{text}"')
 
     voice = _get_voice()
     if voice is None:
-        print(f"[tts] (no voice available) Would say: {text}")
+        print(f"[tts] No voice available — would have said: {text}")
         return
 
     try:
+        # Collect ALL audio chunks first, then write them all at once
+        # This prevents glitchy sound from writing pieces one at a time
+        all_audio = b"".join(
+            chunk.audio_int16_bytes for chunk in voice.synthesize(text)
+        )
+
         with wave.open(_AUDIO_PATH, "wb") as wav_file:
-            # Set WAV parameters: 1 channel (mono), 2 bytes per sample (16-bit),
-            # sample rate from the voice model (usually 22050 Hz)
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(voice.config.sample_rate)
+            wav_file.writeframes(all_audio)
 
-            # Synthesize audio — Piper returns chunks, write each one
-            for chunk in voice.synthesize(text):
-                wav_file.writeframes(chunk.audio_int16_bytes)
-
+        # Play the speech audio
         _play_wav(_AUDIO_PATH)
 
+    except Exception as e:
+        print(f"[tts] Speech failed: {e}")
+        print(f"[tts] Would have said: {text}")
+    finally:
+        # Always clean up the temp file
         try:
             os.remove(_AUDIO_PATH)
         except OSError:
             pass
 
-    except Exception as e:
-        print(f"[tts] Speech generation failed: {e}")
-        print(f"[tts] Would have said: {text}")
+    # Play the bell AFTER speech so user knows they can respond
+    _play_bell()
 
 
-def speak_async(text: str) -> threading.Thread:
-    """Speak in a background thread (non-blocking).
+def speak_async(text):
+    """
+    Same as speak() but runs in the background.
+    This lets Knightro talk AND do animations at the same time!
 
-    Usage:
+    Example:
         t = speak_async("Go Knights!")
-        # ... play animation at the same time ...
+        # do animation here while Knightro is talking
         t.join()  # wait for speech to finish
     """
     thread = threading.Thread(target=speak, args=(text,), daemon=True)
@@ -198,18 +255,27 @@ def speak_async(text: str) -> threading.Thread:
     return thread
 
 
+# =============================================================================
+# TEST — runs when you do "python tts.py" directly
+# =============================================================================
 if __name__ == "__main__":
-    print("=" * 50)
-    print("  Knightro TTS Test (Piper — Offline)")
-    print("=" * 50)
+    print("=" * 55)
+    print("  Knightro TTS Test")
+    print(f"  Voice: {VOICE_MODEL_FILENAME}")
+    print(f"  Bell:  {'ON' if PLAY_BELL else 'OFF'}")
+    print("=" * 55)
     print()
 
-    speak("Hey there! Welcome to UCF! I'm Knightro, your favorite knight!")
+    print("Test 1 — Greeting:")
+    speak("Hey there! Welcome to UCF! I am Knightro, your favorite knight!")
     print()
-    speak("Go Knights! Charge On!")
+
+    print("Test 2 — Chant:")
+    speak("U! C! F! Knights! Charge On!")
     print()
-    speak("The John C. Hitt Library is just down the main walkway. You can't miss it!")
+
+    print("Test 3 — Directions:")
+    speak("The library is just down the main walkway. You cannot miss it!")
     print()
-    print("Done! If you heard audio, Piper is working.")
-    print(f"Current voice: {VOICE_MODEL}")
-    print(f"Speed scale: {LENGTH_SCALE} (lower = faster)")
+
+    print("All done! Did you hear Knightro speak followed by a bell each time?")
