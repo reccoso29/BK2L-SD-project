@@ -1,12 +1,6 @@
 """Knightro Integrated Demo
 Face Recognition + Voice + TTS + Animations + GIF Eyes + Audio Clips
 
-Think of this file like a stage director's script!
-For every moment in the show, it tells:
-  - The BODY what to do    (animate.py → servo motors move)
-  - The EYES what to show  (gif_player.py → LED matrix shows a GIF)
-  - The VOICE what to say  (tts.py → robot voice OR audio_clips.py → real recording)
-
 How to run:
     cd into repo root (BK2L-SD-project/)
     python3 "Interaction Pipeline/integrated_demo.py"
@@ -81,8 +75,6 @@ STT_MODE              = "whisper"
 WAKE_WORD_MODE        = True
 
 # ── The Master Coordination Table ────────────────────────────────────────────
-# For each moment, what animation + GIF should play?
-# Format: "moment_name": ("animation_name", "gif_name")
 COORDINATION_MAP = {
     "wake_word":      ("hello",     "hello"),
     "scanning":       ("thinking",  "thinking"),
@@ -102,32 +94,27 @@ COORDINATION_MAP = {
 }
 
 
-def _do_moment(moment_name, speech_text=None, audio_clip=None, loop_anim=False):
+def _do_moment(moment_name, speech_text=None, audio_clip=None, loop_anim=False, bell=True):
     """
     The main coordination function!
-    Triggers the right animation + GIF eyes + speech all at the same time.
+    Plays the right animation + GIF eyes + speech all at the same time.
 
-    Args:
-        moment_name:  Key from COORDINATION_MAP (e.g. "chant", "farewell")
-        speech_text:  Text for robot voice to say (None = silent)
-        audio_clip:   Name of audio clip to play AFTER speech (None = none)
-        loop_anim:    True = loop animation until speech done, False = play once
+    bell=False means don't ring the bell after speaking.
+    Use this when Knightro is about to scan a face or wait for yes/no,
+    because the bell tells the user to talk and that would be confusing!
     """
     anim_name, gif_name = COORDINATION_MAP.get(moment_name, (None, "default"))
 
-    # Switch eyes immediately
     gif_player.show(gif_name)
 
-    # No animation for this moment? Just speak and return
     if anim_name is None:
         if speech_text:
-            tts.speak(speech_text)
+            tts.speak(speech_text, bell=bell)
         if audio_clip:
             audio_clips.play(audio_clip)
         gif_player.show("default")
         return
 
-    # Start body animation in background thread
     stop_event = threading.Event()
     if loop_anim:
         anim_thread = threading.Thread(
@@ -143,19 +130,14 @@ def _do_moment(moment_name, speech_text=None, audio_clip=None, loop_anim=False):
         )
     anim_thread.start()
 
-    # Speak (blocks until done)
     if speech_text:
-        tts.speak(speech_text)
+        tts.speak(speech_text, bell=bell)
 
-    # Play audio clip after speech
     if audio_clip:
         audio_clips.play(audio_clip)
 
-    # Stop animation
     stop_event.set()
     anim_thread.join(timeout=2.0)
-
-    # Return to idle eyes
     gif_player.show("default")
 
 
@@ -316,15 +298,13 @@ class KnightroDemo:
             except (EOFError, KeyboardInterrupt):
                 break
 
-    def _get_user_input(self, prompt: str, timeout: float = 30.0) -> str | None:
-        while not self._input_queue.empty():
-            try:
-                self._input_queue.get_nowait()
-            except queue.Empty:
-                break
-
+    def _get_speech_input(self, timeout: float = 20.0) -> str | None:
+        """
+        Listens for the user to say a COMMAND (not a wake word).
+        This is used ONLY during active conversation.
+        If it can't hear anything, it plays the helmet sound.
+        """
         if STT_MODE == "typed":
-            print(f"{prompt}", end="", flush=True)
             try:
                 return self._input_queue.get(timeout=timeout)
             except queue.Empty:
@@ -335,8 +315,31 @@ class KnightroDemo:
             result = speech_to_text.speech_to_text()
             if result["error"]:
                 print(f"[demo] Microphone error: {result['reason']}")
-                time.sleep(1.0)   # ← wait for any previous audio to finish
+                # Small pause so it doesnt overlap with previous audio
+                time.sleep(0.5)
+                # Play helmet sound — user tried to talk but we couldnt hear them
                 _do_moment("error", audio_clip="cant_hear")
+                return None
+            return result["text"]
+
+    def _get_wake_word_input(self, timeout: float = 2.0) -> str | None:
+        """
+        Listens for the WAKE WORD only.
+        This NEVER plays the helmet sound when it times out —
+        timing out here is totally normal and expected!
+        Think of it like a motion sensor — it doesnt beep every time
+        nobody walks by, it only reacts when someone actually does!
+        """
+        if STT_MODE == "typed":
+            try:
+                return self._input_queue.get(timeout=timeout)
+            except queue.Empty:
+                return None
+        else:
+            import speech_to_text
+            result = speech_to_text.speech_to_text()
+            if result["error"]:
+                # Timeout during wake word listening is NORMAL — just return None quietly
                 return None
             return result["text"]
 
@@ -348,21 +351,30 @@ class KnightroDemo:
         self._status_msg = "ACTIVE — Scanning..."
         print("[demo] Wake word detected — ACTIVATING!")
 
+        # Set busy=True RIGHT AWAY so the wake word listener stops immediately!
+        # Think of it like hanging a do not disturb sign on the door
         self._busy = True
 
-        # Small pause to let the camera settle before speaking
-        # (only matters on laptop — Pi won't have this issue!)
-        time.sleep(0.5)
+        # Small pause to let camera settle before speaking
+        # This helps with glitchiness on laptop
+        # On the Pi without a screen this wont matter at all
+        time.sleep(0.3)
 
-        # Speak and animate BEFORE turning on face recognition
-        # so the Pi is not doing both at the same time (prevents audio glitch)
+        # Speak BEFORE turning on face recognition
+        # NO BELL here because we are about to scan a face not wait for a command!
         _do_moment("wake_word",
-                   speech_text="Hello, let me see who I'm talking to!")
+                   speech_text="Hello knight fan! Let me see who I am talking to!",
+                   bell=False)
+
+        # Give the Pi a moment to finish audio completely before face scanning
         time.sleep(1.0)
+
+        # NOW turn on face recognition
         self._activated = True
         self._recognized_tracks.clear()
         self._greeted.clear()
-        # Now let face recognition take over
+
+        # Let face recognition take over
         self._busy = False
 
     def _deactivate(self):
@@ -377,20 +389,38 @@ class KnightroDemo:
             threading.Thread(target=self._wait_for_wake_word, daemon=True).start()
 
     def _wait_for_wake_word(self):
+        """
+        Keeps listening for Hey Knightro in the background.
+
+        Key things:
+        - Uses _get_wake_word_input (NOT _get_speech_input) so NO helmet sound on timeout
+        - Checks self._busy so it stops immediately when Knightro is doing something
+        - Uses short 2 second timeout so it reacts quickly to busy flag changes
+        """
         WAKE_PHRASES = [
             "hey knightro", "knightro", "hey nitro", "nitro",
             "hey knight", "hey night row"
         ]
         while not self._activated:
-            # If Knightro is busy, stop listening immediately!
+            # If Knightro is busy talking or scanning, just wait!
+            # Dont try to listen — that would cause the helmet sound to play
             if self._busy:
-                time.sleep(1.0)
+                time.sleep(0.5)
                 continue
-            text = self._get_user_input("", timeout=4.0)
+
+            self._status_msg = 'IDLE — Say "Hey Knightro!" or press W'
+            print("[demo] Listening for wake word...")
+
+            # Use wake word specific input — this NEVER plays helmet sound on timeout!
+            text = self._get_wake_word_input(timeout=2.0)
+
+            # Check if W was pressed while we were listening
             if self._activated:
                 return
+
             if text is None:
-                continue
+                continue  # timed out quietly, just keep looping
+
             if any(phrase in text for phrase in WAKE_PHRASES):
                 self._activate()
                 return
@@ -405,7 +435,6 @@ class KnightroDemo:
         MAX_RETRIES = 3
         best_result = None
 
-        # Show thinking while scanning the face
         gif_player.show("thinking")
         animate.play("thinking")
 
@@ -464,11 +493,13 @@ class KnightroDemo:
             wrong_guesses = set()
         MAX_GUESSES = 2
 
-        _do_moment("wake_word", speech_text=f"Hello! Are you {name}?")
+        # No bell — we are waiting for yes/no not a new command
+        _do_moment("wake_word", speech_text=f"Hello! Are you {name}?", bell=False)
         self._status_msg = f"Asking: Are you {name}?"
         time.sleep(0.5)
 
-        text = self._get_user_input("You (yes/no): ", timeout=15.0)
+        # Use speech input here — this CAN play helmet sound if cant hear yes/no
+        text = self._get_speech_input(timeout=15.0)
         if text is None:
             tts.speak("I didn't catch that. Nice to meet you anyway! Go Knights!")
             self._finish_interaction()
@@ -481,7 +512,6 @@ class KnightroDemo:
             print(f"[demo] Confirmed: {name}")
             self._status_msg = f"Greeting {name}"
             greeting = self._greet_known(name)
-            # Known person gets HEART EYES!
             _do_moment("known_person", speech_text=greeting)
             self._greeted[name] = time.time()
             self._listen_for_commands()
@@ -514,7 +544,7 @@ class KnightroDemo:
             "Welcome, fellow Knight! How can I help you today?",
         ]
         _do_moment("unknown_person", speech_text=random.choice(greetings))
-        tts.speak("You can say 'try again' if you think I should know you!")
+        tts.speak("You can say try again if you think I should know you!")
         self._listen_for_commands()
 
     def _get_next_match(self, exclude: set) -> str | None:
@@ -527,7 +557,7 @@ class KnightroDemo:
         import random
         return random.choice([
             f"Hey, {name}! Great to see you! Welcome back! Go Knights!",
-            f"Well well well, if it isn't {name}! Good to see you around campus!",
+            f"Well well well if it isn't {name}! Good to see you around campus!",
             f"Look who it is! Welcome, {name}! Charge On!",
             f"Hey there, {name}! Always good to see a familiar face!",
             f"{name}! My favorite Knight! How's it going?",
@@ -541,12 +571,15 @@ class KnightroDemo:
         self._status_msg = "Listening..."
         print("\n[demo] Listening for a command...")
 
-        text = self._get_user_input("You: ", timeout=20.0)
+        # Use speech input here — this CAN play helmet sound if cant hear
+        text = self._get_speech_input(timeout=20.0)
 
         if text is None:
-            _do_moment("farewell",
-                       speech_text="Looks like you're done. See you around! Go Knights!",
-                       audio_clip="farewell")
+            # No response — say goodbye and go back to idle
+            gif_player.show("goodbye")
+            animate.play("goodbye")
+            audio_clips.play("farewell")
+            gif_player.show("default")
             self._finish_interaction()
             return
 
@@ -585,29 +618,30 @@ class KnightroDemo:
 
         print(f"[demo] Knightro says: {response}")
 
-        # ── Coordinate animation + eyes + voice + audio for each intent ───────
-
-        # CHANT — only audio clip, no robot voice
+        # CHANT — only audio clip, no robot voice, no bell
         if intent == "chant":
             gif_player.show("chant")
             animate.play("chant")
             audio_clips.play("chant")
             gif_player.show("default")
 
-        # GO KNIGHTS — only audio clip, no robot voice
+        # GO KNIGHTS — only audio clip, no robot voice, no bell
         elif intent == "goknights":
             gif_player.show("goknights")
             animate.play("goknights")
             audio_clips.play("goknights")
             gif_player.show("default")
 
-        # DANCE — dance animation + dance eyes + robot voice
+        # DANCE
         elif intent == "dance":
             _do_moment("dance", speech_text=response)
 
-        # FAREWELL — goodbye animation + goodbye eyes + robot voice + farewell clip
+        # FAREWELL — only audio clip, no robot voice
         elif intent == "farewell":
-            _do_moment("farewell", speech_text=response, audio_clip="farewell")
+            gif_player.show("goodbye")
+            animate.play("goodbye")
+            audio_clips.play("farewell")
+            gif_player.show("default")
             self._finish_interaction()
             return
 
@@ -618,33 +652,32 @@ class KnightroDemo:
         ):
             _do_moment("football", speech_text=response, audio_clip="touchdown")
 
-        # WEATHER — weather eyes + wave animation + robot voice + happy_to_help
+        # WEATHER
         elif any(word in text.lower()
                  for word in ["weather", "rain", "sunny", "temperature", "forecast"]):
-            _do_moment("weather", speech_text=response, audio_clip="happy_to_help")
+            _do_moment("weather", speech_text=response)
 
-        # NEXT GAME — next game eyes + wave animation + robot voice + happy_to_help
+        # NEXT GAME
         elif any(word in text.lower()
                  for word in ["next game", "schedule", "play next", "when do they play"]):
-            _do_moment("next_game", speech_text=response, audio_clip="happy_to_help")
+            _do_moment("next_game", speech_text=response)
 
-        # DIRECTIONS — wave animation + wave eyes + robot voice + happy_to_help
+        # DIRECTIONS
         elif intent == "directions":
-            _do_moment("directions", speech_text=response, audio_clip="happy_to_help")
+            _do_moment("directions", speech_text=response)
 
-        # UCF TRIVIA — wave animation + wave eyes + robot voice + happy_to_help
+        # UCF TRIVIA
         elif intent == "ucf_trivia":
-            _do_moment("directions", speech_text=response, audio_clip="happy_to_help")
+            _do_moment("directions", speech_text=response)
 
-        # GREETING/IDENTITY — hello animation + hello eyes + robot voice
+        # GREETING/IDENTITY
         elif intent in ["greeting", "identity", "knightro_info"]:
             _do_moment("wake_word", speech_text=response)
 
-        # EVERYTHING ELSE — thinking animation + eyes + robot voice + happy_to_help
+        # EVERYTHING ELSE
         else:
-            _do_moment("thinking", speech_text=response, audio_clip="happy_to_help")
+            _do_moment("thinking", speech_text=response)
 
-        # Keep the conversation going!
         self._listen_for_commands()
 
     def _finish_interaction(self):

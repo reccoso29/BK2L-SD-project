@@ -185,7 +185,7 @@ def _play_wav(filepath):
     print("[tts] Could not play audio! Try installing: pip install sounddevice soundfile")
 
 
-def speak(text):
+def speak(text, bell=True):
     """
     Makes Knightro say something out loud!
 
@@ -236,8 +236,10 @@ def speak(text):
         except OSError:
             pass
 
-    # Play the bell AFTER speech so user knows they can respond
-    _play_bell()
+    # Only play bell if we want it!
+    if bell:
+        time.sleep(0.8)
+        _play_bell()
 
 
 def speak_async(text):
