@@ -269,11 +269,11 @@ if __name__ == "__main__":
     print()
 
     print("Test 1 — Greeting:")
-    speak("Hey there! Welcome to UCF! I am Knightro, your favorite knight!")
+    speak("Hey there! Welcome to UCF! Let me see who I am talking to!")
     print()
 
     print("Test 2 — Chant:")
-    speak("U! C! F! Knights! Charge On!")
+    speak("UCF Knights! Charge On!")
     print()
 
     print("Test 3 — Directions:")

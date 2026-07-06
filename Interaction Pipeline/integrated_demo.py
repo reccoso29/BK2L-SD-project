@@ -269,18 +269,21 @@ class KnightroDemo:
                                     daemon=True,
                                 ).start()
 
-                display = self._draw_overlay(frame, active_tracks)
-                cv2.imshow("Knightro Demo", display)
+                # display = self._draw_overlay(frame, active_tracks)
+                # cv2.imshow("Knightro Demo", display)
 
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('w') and not self._activated:
-                    self._activate()
+                # key = cv2.waitKey(1) & 0xFF
+                # if key == ord('q'):
+                #     break
+                # elif key == ord('w') and not self._activated:
+                #     self._activate()
+                # No window needed on Pi!
+                # Just a small sleep so we dont use 100% CPU spinning
+                time.sleep(0.01)
 
         finally:
             cap.release()
-            cv2.destroyAllWindows()
+            # cv2.destroyAllWindows()
             self.detector.close()
             animate.home()
             gif_player.stop()
@@ -358,16 +361,16 @@ class KnightroDemo:
         # Small pause to let camera settle before speaking
         # This helps with glitchiness on laptop
         # On the Pi without a screen this wont matter at all
-        time.sleep(0.3)
+        time.sleep(1.5)
 
         # Speak BEFORE turning on face recognition
         # NO BELL here because we are about to scan a face not wait for a command!
         _do_moment("wake_word",
-                   speech_text="Hello knight fan! Let me see who I am talking to!",
+                   speech_text="Hey there! Welcome to UCF! Let me see who I am talking to!",
                    bell=False)
 
         # Give the Pi a moment to finish audio completely before face scanning
-        time.sleep(1.0)
+        time.sleep(1.5)
 
         # NOW turn on face recognition
         self._activated = True
@@ -405,7 +408,7 @@ class KnightroDemo:
             # If Knightro is busy talking or scanning, just wait!
             # Dont try to listen — that would cause the helmet sound to play
             if self._busy:
-                time.sleep(0.5)
+                time.sleep(1.0)
                 continue
 
             self._status_msg = 'IDLE — Say "Hey Knightro!" or press W'
@@ -571,11 +574,26 @@ class KnightroDemo:
         self._status_msg = "Listening..."
         print("\n[demo] Listening for a command...")
 
-        # Use speech input here — this CAN play helmet sound if cant hear
-        text = self._get_speech_input(timeout=20.0)
+        # Try to listen, give them 2 extra chances if we can't hear!
+        MAX_LISTEN_RETRIES = 2
+        listen_attempts = 0
+        text = None
 
+        while text is None and listen_attempts <= MAX_LISTEN_RETRIES:
+            text = self._get_speech_input(timeout=20.0)
+            
+            if text is None:
+                listen_attempts += 1
+                if listen_attempts <= MAX_LISTEN_RETRIES:
+                    # Can't hear — play helmet sound (already happens inside
+                    # _get_speech_input) then bell, then try again!
+                    print(f"[demo] Can't hear — retry {listen_attempts}/{MAX_LISTEN_RETRIES}")
+                    # Small pause then try again — no robot voice!
+                    time.sleep(1.0)
+
+        # After all retries failed — say goodbye and go to idle
         if text is None:
-            # No response — say goodbye and go back to idle
+            tts.speak("I didn't catch that. Nice to meet you anyway! Go Knights!")
             gif_player.show("goodbye")
             animate.play("goodbye")
             audio_clips.play("farewell")
@@ -601,7 +619,9 @@ class KnightroDemo:
 
         intent = intent_detection.detect_intent(text)
 
-        if intent == "unknown" and system_state.is_online():
+        # Use Groq for unknown questions AND directions questions
+        # because Groq has access to our full UCF building directory!
+        if (intent == "unknown" or intent == "directions") and system_state.is_online():
             import online_llm
             response = _do_thinking_while(online_llm.handle_unknown_with_cloud, text)
             if response is None:
