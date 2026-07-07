@@ -301,72 +301,73 @@ python tests/test_recognition_accuracy.py
 
 ---
 
+
 ## 📊 Baseline Benchmarks
-
+ 
 ### Face Detection (SD-7)
-
-| Metric                       | 💻 MacBook Air M1 | 🥧 Raspberry Pi 5 (Phase 2) |
-|------------------------------|--------------------|-----------------------------|
-| Sustained FPS                | **30** (camera-capped) | _TBD_                   |
-| Confidence on frontal face   | **> 0.90**         | _TBD_                       |
-| Robust to ±45° head rotation | ✅ Yes             | _TBD_                       |
-
+ 
+| Metric | 💻 MacBook Air M1 | 🥧 Raspberry Pi 4 |
+|--------|-------------------|-------------------|
+| Sustained FPS | **30** (camera-capped) | **20+** ✅ |
+| Confidence on frontal face | **> 0.90** | **> 0.90** ✅ |
+| Robust to ±45° head rotation | ✅ Yes | ✅ Yes |
+ 
 ### Face Recognition (SD-11/12) — dlib
-
-| Metric                           | Result            |
-|----------------------------------|-------------------|
-| Same-person avg distance         | **0.42–0.46**     |
-| Different-person avg distance    | **0.70–0.91**     |
-| Separation gap                   | **0.25–0.30+**    |
-| Match threshold                  | **0.50**          |
-| One-shot recognition             | ✅ Yes            |
-| Cross-person confusion           | ❌ None observed  |
-
+ 
+| Metric | Result |
+|--------|--------|
+| Same-person avg distance | **0.42–0.46** |
+| Different-person avg distance | **0.70–0.91** |
+| Separation gap | **0.25–0.30+** |
+| Match threshold | **0.50** |
+| True positive rate | **82%+** ✅ (target: ≥70%) |
+| False positive rate | **0%** ✅ |
+| One-shot recognition | ✅ Yes |
+| Cross-person confusion | ❌ None observed |
+ 
 ---
-
+ 
 ## ✅ Progress Tracker
-
-| Ticket | Description                    | Status |
-|--------|--------------------------------|--------|
-| SD-6   | Privacy & Consent Policy       | ✅ Done |
-| SD-7   | Face Detection (laptop)        | ✅ Done — 30 FPS on MacBook Air M1 |
-| SD-8   | Face Tracking                  | ✅ Done — IoU-based multi-face tracker |
-| SD-9   | Faculty Enrollment Process     | ✅ Done — webcam + photo enrollment with quality checks |
-| SD-10  | Encrypted Embeddings Storage   | ✅ Done — Fernet encryption, separate dlib database |
-| SD-11  | 1:N Recognition Comparison     | ✅ Done — dlib Euclidean distance, one-shot recognition |
-| SD-12  | Accuracy Tests (laptop)        | ✅ Done — 0.30+ separation gap between enrolled people |
-| SD-13  | Integration with greeting flow | 🔄 In Progress — integrated demo with TTS + interaction pipeline |
-| SD-50  | Performance test plan          | ✅ Done (plan) / ⬜ Sprint 2 (execute on Pi) |
-| SD-54  | Safety validation plan         | ✅ Done (plan) / ⬜ Sprint 2 (execute on Pi) |
-
+ 
+| Ticket | Description | Status |
+|--------|-------------|--------|
+| SD-6 | Privacy & Consent Policy | ✅ Done |
+| SD-7 | Face Detection | ✅ Done — 20+ FPS on Pi 4, 30 FPS on MacBook |
+| SD-8 | Face Tracking | ✅ Done — IoU-based multi-face tracker |
+| SD-9 | Faculty Enrollment Process | ✅ Done — webcam + photo enrollment |
+| SD-10 | Encrypted Embeddings Storage | ✅ Done — Fernet encryption |
+| SD-11 | 1:N Recognition Comparison | ✅ Done — dlib Euclidean distance |
+| SD-12 | Accuracy Tests | ✅ Done — 82% TPR, 0% FPR |
+| SD-13 | Integration with greeting flow | ✅ Done — integrated with full demo |
+| SD-50 | Performance test plan | ✅ Done — validated on Pi 4 |
+| SD-54 | Safety validation plan | ✅ Done |
+ 
 ---
-
+ 
 ## 🔒 Privacy Architecture
-
+ 
 All face data is processed and stored **locally on-device**:
-
+ 
 - **No raw images stored** — only 128-dimensional numerical embeddings
 - **Fernet encryption** (AES-128-CBC) for the embedding database
 - **Enrolled faculty have full data removal rights** (`enroll.py --remove`)
 - **No cloud transmission** — all processing stays on the Raspberry Pi
 - **Separate encryption keys** for dlib and legacy ONNX databases
-
 See `Privacy_policy.md` for the full biometric data privacy policy.
-
+ 
 ---
-
+ 
 ## 📚 References
-
+ 
 - Schroff, F., Kalenichenko, D., & Philbin, J. (2015). FaceNet: A unified embedding for face recognition and clustering. *CVPR 2015.*
 - King, D. E. (2009). Dlib-ml: A machine learning toolkit. *Journal of Machine Learning Research, 10*, 1755-1758.
 - Google AI Edge. *MediaPipe Face Detector documentation.* https://ai.google.dev/edge/mediapipe/solutions/vision/face_detector
 - Geitgey, A. *face_recognition library documentation.* https://github.com/ageitgey/face_recognition
 - Hernandez, A. *Knightro Tech Memo 1: Raspberry Pi 4 Computer Vision Benchmarks.*
-
 ---
-
+ 
 <div align="center">
-
 **🛡️ Charge On!** ⚔️
-
+ 
 </div>
+ 
