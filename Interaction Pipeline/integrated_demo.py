@@ -1,12 +1,13 @@
 """Knightro Integrated Demo
-Face Recognition + Voice + TTS + Animations + GIF Eyes + Audio Clips
+Face Recognition + Voice + Animations + GIF Eyes
 
 How to run:
     cd into repo root (BK2L-SD-project/)
     python3 "Interaction Pipeline/integrated_demo.py"
 
-    Press 'q' to quit
-    Press 'w' to simulate the wake word
+    When STT_MODE = "whisper": speak to interact
+    When STT_MODE = "typed":   type commands + Enter
+    Type 'q' + Enter to quit anytime
 """
 
 import os
@@ -15,7 +16,6 @@ import time
 import threading
 import queue
 
-# ── Tell Python where our other files are ────────────────────────────────────
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 _CV_SRC       = os.path.join(_PROJECT_ROOT, "Computer Vision", "src")
@@ -37,15 +37,15 @@ import safety_filters
 import system_state
 import tts
 import audio_clips
+import speech_to_text as stt_module
 
-# ── Load animate.py (servo motors) ───────────────────────────────────────────
 try:
     import animate
     _ANIMATE_AVAILABLE = True
     print("[demo] animate.py loaded — motors ACTIVE")
 except ImportError:
     _ANIMATE_AVAILABLE = False
-    print("[demo] WARNING: animate.py not found — motors DISABLED (using stub)")
+    print("[demo] WARNING: animate.py not found — motors DISABLED")
     class _AnimateStub:
         def home(self): print("[animate-stub] home()")
         def play(self, action, stop_event=None): print(f"[animate-stub] play('{action}')")
@@ -54,14 +54,13 @@ except ImportError:
             stop_event.wait()
     animate = _AnimateStub()
 
-# ── Load gif_player.py (LED eye display) ─────────────────────────────────────
 try:
     import gif_player
     _GIF_AVAILABLE = True
     print("[demo] gif_player.py loaded — LED eyes ACTIVE")
 except ImportError:
     _GIF_AVAILABLE = False
-    print("[demo] WARNING: gif_player.py not found — LED eyes DISABLED (using stub)")
+    print("[demo] WARNING: gif_player.py not found — LED eyes DISABLED")
     class _GifStub:
         def show(self, name): print(f"[gif-stub] show('{name}')")
         def stop(self): print("[gif-stub] stop()")
@@ -71,10 +70,10 @@ except ImportError:
 CAMERA_INDEX          = 0
 RECOGNITION_COOLDOWN  = 10.0
 GREETING_DELAY_FRAMES = 3
-STT_MODE              = "whisper"
+STT_MODE              = "whisper"  # "whisper" = microphone, "typed" = keyboard
 WAKE_WORD_MODE        = True
 
-# ── The Master Coordination Table ────────────────────────────────────────────
+# ── Coordination Map ──────────────────────────────────────────────────────────
 COORDINATION_MAP = {
     "wake_word":      ("hello",     "hello"),
     "scanning":       ("thinking",  "thinking"),
@@ -94,24 +93,14 @@ COORDINATION_MAP = {
 }
 
 
-def _do_moment(moment_name, speech_text=None, audio_clip=None, loop_anim=False, bell=True):
-    """
-    The main coordination function!
-    Plays the right animation + GIF eyes + speech all at the same time.
-
-    bell=False means don't ring the bell after speaking.
-    Use this when Knightro is about to scan a face or wait for yes/no,
-    because the bell tells the user to talk and that would be confusing!
-    """
+def _do_moment(moment_name, speech_text=None, loop_anim=False, bell=True):
+    """Triggers animation + GIF eyes + speech all at the same time."""
     anim_name, gif_name = COORDINATION_MAP.get(moment_name, (None, "default"))
-
     gif_player.show(gif_name)
 
     if anim_name is None:
         if speech_text:
             tts.speak(speech_text, bell=bell)
-        if audio_clip:
-            audio_clips.play(audio_clip)
         gif_player.show("default")
         return
 
@@ -133,20 +122,13 @@ def _do_moment(moment_name, speech_text=None, audio_clip=None, loop_anim=False, 
     if speech_text:
         tts.speak(speech_text, bell=bell)
 
-    if audio_clip:
-        audio_clips.play(audio_clip)
-
     stop_event.set()
     anim_thread.join(timeout=2.0)
     gif_player.show("default")
 
 
 def _do_thinking_while(fn, *args, **kwargs):
-    """
-    Shows thinking animation + eyes while waiting for a slow function.
-    Like Knightro scratching his head while thinking of an answer!
-    Returns whatever fn() returned.
-    """
+    """Shows thinking animation while waiting for a slow function."""
     result_box = [None]
     error_box  = [None]
 
@@ -184,15 +166,19 @@ class KnightroDemo:
     def __init__(self):
         print("=" * 55)
         print("  Knightro Integrated Demo")
-        print("  Face + Voice + Motors + Eyes + Audio")
+        print("  Face + Voice + Motors + Eyes")
         print("=" * 55)
         print()
 
         gif_player.show("default")
+
         print("[demo] Playing startup sound...")
         audio_clips.play_async("startup")
 
-        print("[demo] Homing motors to safe position...")
+        print("[demo] Pre-loading voice model...")
+        tts.preload_voice()
+
+        print("[demo] Homing motors...")
         animate.home()
 
         print("[demo] Setting up face detection...")
@@ -215,6 +201,7 @@ class KnightroDemo:
         self.recognizer = FaceRecognizer(similarity_threshold=0.970, db=db)
 
         print(f"[demo] Internet: {'ONLINE' if system_state.is_online() else 'OFFLINE'}")
+        print(f"[demo] STT Mode: {STT_MODE}")
         print(f"[demo] Enrolled people: {self.recognizer.enrolled_count}")
         print()
 
@@ -223,7 +210,7 @@ class KnightroDemo:
         self._activated                = not WAKE_WORD_MODE
         self._busy                     = False
         self._input_queue: queue.Queue = queue.Queue()
-        self._status_msg = 'IDLE — Say "Hey Knightro!" or press W' if WAKE_WORD_MODE else "ACTIVE"
+        self._status_msg = 'IDLE — Say "Hey Knightro!" or type w + Enter'
 
     # ──────────────────────────────────────────────────────────────────────────
     # Main camera loop
@@ -235,14 +222,18 @@ class KnightroDemo:
             print("[demo] ERROR: Could not open camera!")
             return
 
-        print("[demo] Camera is running!")
-        print("  q = quit  |  w = simulate wake word")
+        print(f"[demo] Running!")
+        if STT_MODE == "typed":
+            print("[demo] TYPED MODE: type commands + Enter")
+        else:
+            print("[demo] WHISPER MODE: speak to interact")
+        print("[demo] Type 'q' + Enter to quit anytime")
         print()
 
         self._cap = cap
 
-        if STT_MODE == "typed":
-            threading.Thread(target=self._input_reader, daemon=True).start()
+        # Always start keyboard reader — needed for q to quit
+        threading.Thread(target=self._input_reader, daemon=True).start()
 
         if WAKE_WORD_MODE and not self._activated:
             threading.Thread(target=self._wait_for_wake_word, daemon=True).start()
@@ -269,22 +260,10 @@ class KnightroDemo:
                                     daemon=True,
                                 ).start()
 
-                # display = self._draw_overlay(frame, active_tracks)
-                # cv2.imshow("Knightro Demo", display)
-
-                # key = cv2.waitKey(1) & 0xFF
-                # if key == ord('q'):
-                #     break
-                # elif key == ord('w') and not self._activated:
-                #     self._activate()
-                # No window needed on Pi!
-                # Just a small sleep so we dont use 100% CPU spinning
                 time.sleep(0.01)
 
         finally:
             cap.release()
-            # cv2.destroyAllWindows()
-            self.detector.close()
             animate.home()
             gif_player.stop()
             print("[demo] Done. Go Knights!")
@@ -294,18 +273,23 @@ class KnightroDemo:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _input_reader(self):
+        """Always running — reads keyboard input for quit and typed mode."""
         while True:
             try:
                 line = input().strip().lower()
+                if line == 'q':
+                    print("[demo] Quit requested!")
+                    os._exit(0)
                 self._input_queue.put(line)
             except (EOFError, KeyboardInterrupt):
                 break
 
     def _get_speech_input(self, timeout: float = 20.0) -> str | None:
         """
-        Listens for the user to say a COMMAND (not a wake word).
-        This is used ONLY during active conversation.
-        If it can't hear anything, it plays the helmet sound.
+        Gets a command from the user.
+        In whisper mode: uses microphone (Groq if online, local if offline)
+        In typed mode: waits for keyboard input
+        Plays error sound if can't hear.
         """
         if STT_MODE == "typed":
             try:
@@ -314,36 +298,33 @@ class KnightroDemo:
                 print("\n[demo] Timed out.")
                 return None
         else:
-            import speech_to_text
-            result = speech_to_text.speech_to_text()
+            result = stt_module.speech_to_text()
             if result["error"]:
                 print(f"[demo] Microphone error: {result['reason']}")
-                # Small pause so it doesnt overlap with previous audio
                 time.sleep(0.5)
-                # Play helmet sound — user tried to talk but we couldnt hear them
-                _do_moment("error", audio_clip="cant_hear")
+                _do_moment("error",
+                           speech_text="Sorry, I didn't catch that! Could you say that again?")
                 return None
             return result["text"]
 
-    def _get_wake_word_input(self, timeout: float = 2.0) -> str | None:
+    def _get_wake_word_input(self) -> str | None:
         """
-        Listens for the WAKE WORD only.
-        This NEVER plays the helmet sound when it times out —
-        timing out here is totally normal and expected!
-        Think of it like a motion sensor — it doesnt beep every time
-        nobody walks by, it only reacts when someone actually does!
+        Listens for the wake word.
+        In whisper mode: listens via microphone (Groq if online, local if offline)
+        In typed mode: checks keyboard queue with short timeout
+        NEVER plays error sound — timing out here is totally normal!
         """
         if STT_MODE == "typed":
             try:
-                return self._input_queue.get(timeout=timeout)
+                return self._input_queue.get(timeout=2.0)
             except queue.Empty:
                 return None
         else:
-            import speech_to_text
-            result = speech_to_text.speech_to_text()
+            # Use microphone for wake word detection
+            # Short phrase_time_limit so it doesn't wait too long
+            result = stt_module.speech_to_text(timeout=5.0, phrase_time_limit=3.0)
             if result["error"]:
-                # Timeout during wake word listening is NORMAL — just return None quietly
-                return None
+                return None  # silently return None — no error sound for wake word!
             return result["text"]
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -353,31 +334,15 @@ class KnightroDemo:
     def _activate(self):
         self._status_msg = "ACTIVE — Scanning..."
         print("[demo] Wake word detected — ACTIVATING!")
-
-        # Set busy=True RIGHT AWAY so the wake word listener stops immediately!
-        # Think of it like hanging a do not disturb sign on the door
         self._busy = True
-
-        # Small pause to let camera settle before speaking
-        # This helps with glitchiness on laptop
-        # On the Pi without a screen this wont matter at all
-        time.sleep(1.5)
-
-        # Speak BEFORE turning on face recognition
-        # NO BELL here because we are about to scan a face not wait for a command!
+        time.sleep(0.3)
         _do_moment("wake_word",
                    speech_text="Hey there! Welcome to UCF! Let me see who I am talking to!",
                    bell=False)
-
-        # Give the Pi a moment to finish audio completely before face scanning
-        time.sleep(1.5)
-
-        # NOW turn on face recognition
+        time.sleep(1.0)
         self._activated = True
         self._recognized_tracks.clear()
         self._greeted.clear()
-
-        # Let face recognition take over
         self._busy = False
 
     def _deactivate(self):
@@ -385,7 +350,7 @@ class KnightroDemo:
         self._busy       = False
         self._recognized_tracks.clear()
         self._greeted.clear()
-        self._status_msg = 'IDLE — Say "Hey Knightro!" or press W'
+        self._status_msg = 'IDLE — Say "Hey Knightro!" or type w + Enter'
         gif_player.show("default")
         print("[demo] Back to idle.")
         if WAKE_WORD_MODE:
@@ -393,37 +358,33 @@ class KnightroDemo:
 
     def _wait_for_wake_word(self):
         """
-        Keeps listening for Hey Knightro in the background.
-
-        Key things:
-        - Uses _get_wake_word_input (NOT _get_speech_input) so NO helmet sound on timeout
-        - Checks self._busy so it stops immediately when Knightro is doing something
-        - Uses short 2 second timeout so it reacts quickly to busy flag changes
+        Listens for Hey Knightro in background.
+        In whisper mode: actually listens via microphone
+        In typed mode: waits for 'w' from keyboard
         """
         WAKE_PHRASES = [
             "hey knightro", "knightro", "hey nitro", "nitro",
-            "hey knight", "hey night row"
+            "hey knight", "hey night row",
+            "w",  # typed shortcut
         ]
+
         while not self._activated:
-            # If Knightro is busy talking or scanning, just wait!
-            # Dont try to listen — that would cause the helmet sound to play
             if self._busy:
-                time.sleep(1.0)
+                time.sleep(0.5)
                 continue
 
-            self._status_msg = 'IDLE — Say "Hey Knightro!" or press W'
-            print("[demo] Listening for wake word...")
+            self._status_msg = 'IDLE — Say "Hey Knightro!" or type w + Enter'
+            if STT_MODE == "whisper":
+                print("[demo] Listening for wake word via microphone...")
+            else:
+                print("[demo] Waiting for wake word (type w + Enter)...")
 
-            # Use wake word specific input — this NEVER plays helmet sound on timeout!
-            text = self._get_wake_word_input(timeout=2.0)
+            text = self._get_wake_word_input()
 
-            # Check if W was pressed while we were listening
             if self._activated:
                 return
-
             if text is None:
-                continue  # timed out quietly, just keep looping
-
+                continue
             if any(phrase in text for phrase in WAKE_PHRASES):
                 self._activate()
                 return
@@ -496,12 +457,10 @@ class KnightroDemo:
             wrong_guesses = set()
         MAX_GUESSES = 2
 
-        # No bell — we are waiting for yes/no not a new command
         _do_moment("wake_word", speech_text=f"Hello! Are you {name}?", bell=False)
         self._status_msg = f"Asking: Are you {name}?"
         time.sleep(0.5)
 
-        # Use speech input here — this CAN play helmet sound if cant hear yes/no
         text = self._get_speech_input(timeout=15.0)
         if text is None:
             tts.speak("I didn't catch that. Nice to meet you anyway! Go Knights!")
@@ -572,32 +531,26 @@ class KnightroDemo:
 
     def _listen_for_commands(self):
         self._status_msg = "Listening..."
-        print("\n[demo] Listening for a command...")
+        if STT_MODE == "whisper":
+            print("\n[demo] Listening for command via microphone...")
+        else:
+            print("\n[demo] Type your command + Enter...")
 
-        # Try to listen, give them 2 extra chances if we can't hear!
         MAX_LISTEN_RETRIES = 2
-        listen_attempts = 0
-        text = None
+        listen_attempts    = 0
+        text               = None
 
         while text is None and listen_attempts <= MAX_LISTEN_RETRIES:
-            text = self._get_speech_input(timeout=20.0)
-            
+            text = self._get_speech_input(timeout=10.0)
             if text is None:
                 listen_attempts += 1
                 if listen_attempts <= MAX_LISTEN_RETRIES:
-                    # Can't hear — play helmet sound (already happens inside
-                    # _get_speech_input) then bell, then try again!
                     print(f"[demo] Can't hear — retry {listen_attempts}/{MAX_LISTEN_RETRIES}")
-                    # Small pause then try again — no robot voice!
                     time.sleep(1.0)
 
-        # After all retries failed — say goodbye and go to idle
         if text is None:
             tts.speak("I didn't catch that. Nice to meet you anyway! Go Knights!")
-            gif_player.show("goodbye")
-            animate.play("goodbye")
-            audio_clips.play("farewell")
-            gif_player.show("default")
+            _do_moment("farewell")
             self._finish_interaction()
             return
 
@@ -619,8 +572,6 @@ class KnightroDemo:
 
         intent = intent_detection.detect_intent(text)
 
-        # Use Groq for unknown questions AND directions questions
-        # because Groq has access to our full UCF building directory!
         if (intent == "unknown" or intent == "directions") and system_state.is_online():
             import online_llm
             response = _do_thinking_while(online_llm.handle_unknown_with_cloud, text)
@@ -638,39 +589,33 @@ class KnightroDemo:
 
         print(f"[demo] Knightro says: {response}")
 
-        # CHANT — only audio clip, no robot voice, no bell
+        # CHANT — only audio clip, no robot voice
         if intent == "chant":
             gif_player.show("chant")
             animate.play("chant")
             audio_clips.play("chant")
             gif_player.show("default")
 
-        # GO KNIGHTS — only audio clip, no robot voice, no bell
+        # GO KNIGHTS — robot voice
         elif intent == "goknights":
-            gif_player.show("goknights")
-            animate.play("goknights")
-            audio_clips.play("goknights")
-            gif_player.show("default")
+            _do_moment("goknights", speech_text="Go Knights! Charge On!")
 
         # DANCE
         elif intent == "dance":
             _do_moment("dance", speech_text=response)
 
-        # FAREWELL — only audio clip, no robot voice
+        # FAREWELL — robot voice says goodbye
         elif intent == "farewell":
-            gif_player.show("goodbye")
-            animate.play("goodbye")
-            audio_clips.play("farewell")
-            gif_player.show("default")
+            _do_moment("farewell", speech_text=response)
             self._finish_interaction()
             return
 
-        # FOOTBALL — fire eyes + ucf animation + robot voice + touchdown clip
+        # FOOTBALL
         elif intent == "ucf_trivia" and any(
             word in text.lower()
             for word in ["football", "touchdown", "score", "game", "bowl", "stadium"]
         ):
-            _do_moment("football", speech_text=response, audio_clip="touchdown")
+            _do_moment("football", speech_text=response)
 
         # WEATHER
         elif any(word in text.lower()
@@ -708,48 +653,6 @@ class KnightroDemo:
             self._status_msg = "ACTIVE — Scanning..."
             self._recognized_tracks.clear()
             self._greeted.clear()
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Camera overlay
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _draw_overlay(self, frame, tracks):
-        display = frame.copy()
-
-        for track in tracks:
-            box = track.bbox
-            if self._activated:
-                if hasattr(track, 'identity') and track.identity:
-                    color = (0, 199, 255)
-                    label = track.identity
-                elif track.is_recognized:
-                    color = (255, 255, 255)
-                    label = "Visitor"
-                else:
-                    color = (128, 128, 128)
-                    label = "Detecting..."
-            else:
-                color = (128, 128, 128)
-                label = ""
-
-            cv2.rectangle(display, (box.x, box.y), (box.x2, box.y2), color, 2)
-            if label:
-                cv2.putText(display, label, (box.x, max(0, box.y - 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        bar_color = (0, 255, 0) if self._activated else (0, 165, 255)
-        cv2.putText(display, self._status_msg, (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, bar_color, 2)
-
-        hw = f"Motors: {'ON' if _ANIMATE_AVAILABLE else 'OFF'}  Eyes: {'ON' if _GIF_AVAILABLE else 'OFF'}"
-        cv2.putText(display, hw, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                    (0, 255, 0) if _ANIMATE_AVAILABLE else (0, 0, 255), 1)
-
-        info = f"Enrolled: {self.recognizer.enrolled_count} | q=quit  w=wake"
-        cv2.putText(display, info, (10, display.shape[0] - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-
-        return display
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
